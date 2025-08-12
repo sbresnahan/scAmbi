@@ -46,7 +46,34 @@ install.packages("scAmbi.zip", repos = NULL, type = "source")
 # devtools::install("path/to/scAmbi/")
 ```
 
-**Requirements:** R ≥ 4.2. Core Imports include `Seurat`, `edgeR`, `Matrix`, `ggplot2`, `patchwork`, `eds`, `jsonlite`, `tximport`. Install tools like `devtools`, `roxygen2`, `testthat`, `knitr`, `rmarkdown` for development and vignettes.
+### Requirements
+
+This package requires **R version 4.2 or higher**.
+
+#### Core Dependencies
+
+The following packages are automatically installed when you install `scAmbi`.
+
+* `Seurat`
+* `SeuratObject`
+* `edgeR`
+* `Matrix`
+* `ggplot2`
+* `patchwork`
+* `eds`
+* `dplyr`
+* `tidyr`
+* `magrittr`
+* `parallel`
+* `Rcpp`
+* `rtracklayer`
+
+#### Development Dependencies
+
+These packages are necessary for building the vignettes and running tests. You can install them by running the following command:
+
+```R
+install.packages(c("knitr", "rmarkdown", "testthat"))
 
 ---
 
@@ -77,7 +104,7 @@ p <- plot_within_sample_bcv(wres, sample_name = "S1")
 print(p)
 ```
 
-See the vignette for a full, reproducible walkthrough.
+[See the vignette](https://seantbresnahan.com/scambi) for a full, reproducible walkthrough.
 
 ---
 
@@ -98,7 +125,7 @@ salmon alevin \
 
 Notes:
 - scAmbi reads the **boot matrix** and associated index files via `eds::readEDS()`.
-- For transcript-centric work, provide a suitable index/mapping
+- For transcript-centric work, provide a suitable index/mapping to Alevin.
 
 ---
 
@@ -111,19 +138,7 @@ browseVignettes("scAmbi")
 devtools::build_vignettes(); browseVignettes("scAmbi")
 ```
 
-The vignette demonstrates OD estimation, Seurat correction, and BCV diagnostics end-to-end.
-
----
-
-## Development
-
-```r
-devtools::document()
-devtools::build_vignettes()
-devtools::check()
-```
-
-GitHub Actions for R CMD check are included. A basic `_pkgdown.yml` is set; run `usethis::use_pkgdown(); pkgdown::build_site()` to publish docs.
+[The vignette](https://seantbresnahan.com/scambi) demonstrates OD estimation, Seurat correction, and BCV diagnostics end-to-end.
 
 ---
 
@@ -136,4 +151,4 @@ GPL-3.
 
 ## Citation
 
-If you use scAmbi, please cite this repository and the tools it builds upon (e.g., Salmon/Alevin, edgeR). A formal CITATION file can be added once a preprint is available.
+If you use scAmbi, please cite this repository and the tools it builds upon (e.g., Salmon/Alevin, edgeR). A formal citation will be added once a preprint is available.
