@@ -1,0 +1,42 @@
+Package: scAmbi
+Type: Package
+Title: Mapping Ambiguity Overdispersion Correction for scRNA-seq
+Version: 0.1.0
+Authors@R: person("Sean T.", "Bresnahan", email = "stbresnahan@mdanderson.org", role = c("aut","cre"))
+Description: Tools to estimate and correct overdispersion from read-to-transcript mapping ambiguity
+    for single-cell RNA-seq quantifications (e.g., Salmon Alevin bootstraps), and utilities to
+    compare biological coefficient of variation (BCV) before/after correction.
+License: GPL-3
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+URL: https://github.com/sbresnahan/scAmbi
+BugReports: https://github.com/sbresnahan/scAmbi/issues
+Depends: R (>= 4.2)
+Imports:
+    Seurat,
+    SeuratObject,
+    Matrix,
+    edgeR,
+    ggplot2,
+    patchwork,
+    eds,
+    methods,
+    stats,
+    utils,
+    Rcpp,
+    rtracklayer,
+    dplyr,
+    tidyr,
+    magrittr,
+    parallel
+LinkingTo: 
+    Rcpp
+Suggests:
+    testthat (>= 3.1.0),
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+Config/testthat/edition: 3
+
