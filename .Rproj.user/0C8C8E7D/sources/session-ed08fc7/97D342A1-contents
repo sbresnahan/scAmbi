@@ -119,7 +119,7 @@ p <- plot_within_sample_bcv(wres, sample_name = "S1")
 print(p)
 ```
 
-[See the vignette](https://seantbresnahan.com/scAmbi) for a full, reproducible walkthrough.
+[See the vignette](https://seantbresnahan.com/scambi) for a full, reproducible walkthrough.
 
 ---
 
@@ -157,7 +157,7 @@ browseVignettes("scAmbi")
 devtools::build_vignettes(); browseVignettes("scAmbi")
 ```
 
-[The vignette](https://seantbresnahan.com/scAmbi) demonstrates OD estimation, Seurat correction, and BCV diagnostics end-to-end.
+[The vignette](https://seantbresnahan.com/scambi) demonstrates OD estimation, Seurat correction, and BCV diagnostics end-to-end.
 
 ---
 

@@ -462,10 +462,6 @@ knitr::include_graphics("plot1.png")
 knitr::include_graphics("plot2.png")
 ```
 
-```{r include-plot3, echo=FALSE, fig.cap="Figure 3", out.width="100%"}
-knitr::include_graphics("plot3.png")
-```
-
 ---
 
 # References
