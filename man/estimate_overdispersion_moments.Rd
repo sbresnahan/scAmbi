@@ -10,7 +10,7 @@ estimate_overdispersion_moments(counts, min_cells = 10, size_factors = NULL)
 \item{counts}{A numeric or sparse matrix of gene-by-cell counts.}
 
 \item{min_cells}{Minimum number of cells with nonzero expression
-required for a gene to be included in estimation. Genes with fewer
+required for a gene to be included in estimation. Transcripts with fewer
 than this number are assigned an overdispersion of 1.}
 
 \item{size_factors}{Optional numeric vector of size factors for each

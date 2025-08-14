@@ -23,7 +23,7 @@ utils::globalVariables(c(
 #'     overdispersion factor for each transcript using a weighted geometric mean and
 #'     empirical Bayes shrinkage.
 #'   \item \strong{Correction}: Generates a new, corrected data assay within a Seurat object
-#'     where raw counts are adjusted by the integrated overdispersion factors by default.
+#'     where raw counts are adjusted by the bootstrap scaling factors by default.
 #'     Vectors for each estimate are also stored for manual correction.
 #'   \item \strong{Evaluation}: Offers tools to calculate and visualize the Biological
 #'     Coefficient of Variation (BCV) both within a single sample (across pseudo-bulk
@@ -287,7 +287,7 @@ compute_overdisp_sparse_aware <- function(
 #'
 #' @param counts A numeric or sparse matrix of gene-by-cell counts.
 #' @param min_cells Minimum number of cells with nonzero expression
-#'   required for a gene to be included in estimation. Genes with fewer
+#'   required for a gene to be included in estimation. Transcripts with fewer
 #'   than this number are assigned an overdispersion of 1.
 #' @param size_factors Optional numeric vector of size factors for each
 #'   cell. If \code{NULL}, they are computed as the column sums of
@@ -523,7 +523,7 @@ estimate_overdispersion_integrated <- function(
   
   .log("[OD Integrated] Final range: min=%.3f, med=%.3f, max=%.3f",
        min(od_integrated), median(od_integrated), max(od_integrated))
-  .log("[OD Integrated] Genes with OD > 1.5: %.1f%%, > 2: %.1f%%",
+  .log("[OD Integrated] Transcripts with OD > 1.5: %.1f%%, > 2: %.1f%%",
        mean(od_integrated > 1.5) * 100, mean(od_integrated > 2) * 100)
   
   list(
@@ -650,8 +650,8 @@ read_sample_data_improved <- function(
 #' Create a Seurat Object with a Corrected Assay
 #'
 #' Generates a Seurat object containing both the original raw counts and an
-#' overdispersion-corrected count assay. Correction is based on integrated
-#' estimates from \code{\link{estimate_overdispersion_integrated}}.
+#' overdispersion-corrected count assay. Default correction is based on bootstrap
+#' estimates from \code{\link{compute_overdisp_sparse_aware}}.
 #'
 #' @param sample_id Character string; a unique identifier for the sample, used
 #'   for labeling the Seurat object project.
@@ -667,7 +667,7 @@ read_sample_data_improved <- function(
 #' @details
 #' This function creates a Seurat object with the raw counts stored in the default
 #' `RNA` assay. It then calculates corrected counts by dividing the raw counts
-#' for each gene by the corresponding integrated overdispersion factor from the
+#' for each gene by the corresponding bootstrap overdispersion factor from the
 #' `od` object. These corrected counts are stored in a new assay named `RNA_corr`.
 #'
 #' Both assays are populated with rich feature-level metadata, including the
@@ -696,14 +696,14 @@ process_and_create_seurat_corrected_improved <- function(
   t0 <- Sys.time()
   .log("[%s] Starting Seurat object creation with IMPROVED scaling", sample_id)
   
-  scaling_factors <- od$overdispersion
+  scaling_factors <- od$od_bootstrap
   if (length(scaling_factors) != nrow(counts)) {
     stop("Mismatch between overdispersion length and count matrix rows")
   }
   
   .log("[%s] Integrated OD range: min=%.3f, median=%.3f, max=%.3f",
        sample_id, min(scaling_factors), median(scaling_factors), max(scaling_factors))
-  .log("[%s] Genes with OD > 1.5: %.1f%%, > 2: %.1f%%",
+  .log("[%s] Transcripts with OD > 1.5: %.1f%%, > 2: %.1f%%",
        sample_id, mean(scaling_factors > 1.5) * 100, mean(scaling_factors > 2) * 100)
   
   inv_scaling <- 1 / scaling_factors
@@ -715,7 +715,7 @@ process_and_create_seurat_corrected_improved <- function(
   seu[["RNA_corr"]] <- Seurat::CreateAssayObject(counts = counts_corr)
   
   fm <- data.frame(
-    OverDisp_integrated = scaling_factors,
+    OverDisp_integrated = od$overdispersion,
     OverDisp_bootstrap  = od$od_bootstrap,
     OverDisp_moments    = od$od_moments,
     OverDisp_prior      = od$od_prior,
@@ -726,7 +726,7 @@ process_and_create_seurat_corrected_improved <- function(
   )
   SeuratObject::Misc(seu[["RNA"]], "feature_meta")      <- fm
   SeuratObject::Misc(seu[["RNA_corr"]], "feature_meta") <- fm
-  SeuratObject::Misc(seu, "od_method") <- "integrated_bootstrap_moments_prior"
+  SeuratObject::Misc(seu, "od_method") <- "bootstrap"
   
   DefaultAssay(seu) <- "RNA_corr"
   seu$sample <- sample_id
@@ -867,7 +867,7 @@ set_feature_metadata <- function(objs, file_path, assays = c("RNA", "RNA_corr"))
 #'
 #' @param seurat_list A list of Seurat objects.
 #' @param vector_name The character name of the column to extract from the
-#'   feature metadata data frame (e.g., "OverDisp_integrated").
+#'   feature metadata data frame (e.g., "scaling_factor").
 #' @param prefer_assays A character vector of assay names to search, in order
 #'   of preference (e.g., `c("RNA_corr", "RNA")`).
 #'
@@ -893,9 +893,9 @@ extract_feature_vector <- function(seurat_list, vector_name,
     for (assay_nm in prefer_assays) {
       if (assay_nm %in% names(obj@assays)) {
         fm <- obj@assays[[assay_nm]]@misc[["feature_meta"]]
-        if (!is.null(fm) && vector_name %in% colnames(fm)) {
+        if (!is.null(fm) && vector_name %in% names(fm)) {
           vec <- fm[[vector_name]]
-          names(vec) <- rownames(fm)
+          names(vec) <- fm[["feature_id"]]
           .log("Found '%s' in object %d assay %s for %d genes", vector_name, i, assay_nm, length(vec))
           return(vec)
         }
@@ -907,28 +907,23 @@ extract_feature_vector <- function(seurat_list, vector_name,
 }
 
 
-#' Extract Overdispersion Vector (Legacy Support)
+#' Extract Overdispersion Vector
 #'
-#' A wrapper function to extract an overdispersion vector from a list of
-#' Seurat objects. It provides backward compatibility by first searching for
-#' a column named "OverDisp" and then falling back to "OverDisp_integrated".
+#' A wrapper function to extract the default overdispersion vector
+#' ("scaling_factor") from a list of Seurat objects.
 #'
 #' @param seurat_list A list of Seurat objects.
 #'
 #' @return A named numeric vector of overdispersion values. Returns `NULL` if
-#'   neither "OverDisp" nor "OverDisp_integrated" is found in the feature
-#'   metadata.
+#'   "scaling_factor" is not found in the feature metadata.
 #'
 #' @details This function is a convenient helper that uses
-#'   \code{\link{extract_feature_vector}} to retrieve overdispersion estimates,
-#'   prioritizing the legacy "OverDisp" column name.
+#'   \code{\link{extract_feature_vector}} to retrieve overdispersion estimates.
 #'
 #' @export
 extract_overdispersion <- function(seurat_list) {
-  v <- extract_feature_vector(seurat_list, "OverDisp")
+  v <- extract_feature_vector(seurat_list, "scaling_factor")
   if (!is.null(v)) return(v)
-  # fall back to the integrated value if present
-  extract_feature_vector(seurat_list, "OverDisp_integrated")
 }
 
 
@@ -1203,7 +1198,7 @@ calculate_within_sample_bcv <- function(seurat_obj,
 #' @param robust Logical, whether to use robust dispersion estimation in \code{edgeR} (default: TRUE).
 #' @param seed Integer seed for reproducible grouping (default: 42).
 #' @param offset_vector_name Optional character string naming a feature metadata vector 
-#'   to use as an offset in BCV estimation (e.g., "OverDisp_integrated").
+#'   to use as an offset in BCV estimation (e.g., "scaling_factor").
 #' @param offset_vector_as Character scalar, either \code{"od"} (interpret offset vector 
 #'   as overdispersion factors) or \code{"ratio"} (interpret as multiplicative ratios 
 #'   to adjust counts). Default is \code{"od"}.
@@ -1225,7 +1220,7 @@ calculate_within_sample_bcv <- function(seurat_obj,
 #'   seurat_list = list(sample1 = seu1, sample2 = seu2),
 #'   assay_names = c("RNA", "RNA_corr"),
 #'   n_groups = 8,
-#'   offset_vector_name = "OverDisp_integrated"
+#'   offset_vector_name = "scaling_factor"
 #' )
 #' }
 #'
@@ -1560,7 +1555,7 @@ diagnose_seurat_correction <- function(objs, genes_to_check = NULL, sample_idx =
     if ("OverDisp" %in% names(feature_meta)) {
       od_stats <- summary(feature_meta$OverDisp)
       cat("\nOverdispersion statistics:\n"); print(od_stats)
-      cat(sprintf("  Genes with OD > 1: %d (%.1f%%)\n", sum(feature_meta$OverDisp > 1, na.rm = TRUE),
+      cat(sprintf("  Transcripts with OD > 1: %d (%.1f%%)\n", sum(feature_meta$OverDisp > 1, na.rm = TRUE),
                   100 * mean(feature_meta$OverDisp > 1, na.rm = TRUE)))
     }
   }
@@ -1610,7 +1605,7 @@ diagnose_seurat_correction <- function(objs, genes_to_check = NULL, sample_idx =
   gene_ratios <- gene_ratios[is.finite(gene_ratios) & gene_ratios > 0]
   cat(sprintf("Median gene ratio (corr/raw): %.3f\n", median(gene_ratios)))
   cat(sprintf("Mean gene ratio: %.3f\n", mean(gene_ratios)))
-  cat(sprintf("Genes with ratio > 1: %d (%.1f%%)\n", sum(gene_ratios > 1), 100 * mean(gene_ratios > 1)))
+  cat(sprintf("Transcripts with ratio > 1: %d (%.1f%%)\n", sum(gene_ratios > 1), 100 * mean(gene_ratios > 1)))
   cat("\n", strrep("=", 60), "\n\n")
   invisible(list(
     gene_ratios = gene_ratios,
@@ -1694,7 +1689,7 @@ calculate_bcv_direct <- function(pb_counts, min_counts = 10, robust = TRUE,
 #'
 #' @details This function serves as the core of between-sample BCV analysis when
 #' accounting for technical noise. By providing a `feature_vector` (like
-#' integrated overdispersion), the `edgeR` model can distinguish biological
+#' scaling_factor), the `edgeR` model can distinguish biological
 #' variability from known technical variance, ideally resulting in a lower and
 #' more accurate BCV estimate.
 #'
@@ -2053,7 +2048,7 @@ print_summary <- function(results, type = "between") {
     cat(sprintf(">>> %s:\n", nm))
     if (type == "between") {
       cat(sprintf("    samples: %d\n", b$n_samples))
-      cat(sprintf("    Genes analyzed: %d\n", b$n_genes))
+      cat(sprintf("    Transcripts analyzed: %d\n", b$n_genes))
       cat(sprintf("    Common BCV: %.4f\n", b$bcv_common))
       cat(sprintf("    Median tagwise BCV: %.4f\n", median(b$bcv_tagwise, na.rm = TRUE)))
       cat(sprintf("    BCV range: [%.4f, %.4f]\n\n",
@@ -2250,7 +2245,7 @@ analyze_bcv_comprehensive <- function(
     } else if (correction_method == "offset_od") {
       .log("Using offset correction based on overdispersion vector")
       od_values <- extract_overdispersion(objs)
-      if (is.null(od_values)) stop("offset_od requested but no 'OverDisp' or 'OverDisp_integrated' found")
+      if (is.null(od_values)) stop("offset_od requested but no 'scaling_factor' found")
       bcv_corr <- calculate_bcv(pb_rna, overdispersion = od_values,
                                 offset_method = "overdispersion",
                                 min_counts = min_counts_between, robust = robust)

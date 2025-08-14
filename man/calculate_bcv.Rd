@@ -56,7 +56,7 @@ technical variability (e.g., from overdispersion).
 \details{
 This function serves as the core of between-sample BCV analysis when
 accounting for technical noise. By providing a \code{feature_vector} (like
-integrated overdispersion), the \code{edgeR} model can distinguish biological
+scaling_factor), the \code{edgeR} model can distinguish biological
 variability from known technical variance, ideally resulting in a lower and
 more accurate BCV estimate.
 }

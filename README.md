@@ -9,7 +9,7 @@
 Multi-mapping fragments and assignment ambiguity inflate inferential variance. Alevin can emit per-cell bootstrap replicates that capture this. scAmbi:
 
 - computes per-gene OD from bootstraps (sparse-aware, block-wise),
-- integrates bootstrap-, moments-, and prior-based estimates,
+- integrates bootstrap-, moments-, and prior-based estimates for exploration,
 - constructs a corrected assay (counts scaled by 1/OD),
 - quantifies improvement via edgeR BCV (within/between sample),
 - offers plotting + summaries for rapid QC.
@@ -25,6 +25,50 @@ Multi-mapping fragments and assignment ambiguity inflate inferential variance. A
 - **Between-sample BCV:** `extract_and_pseudobulk()`, `calculate_bcv_direct()`
 - **Visualization:** `plot_within_sample_bcv()`, `plot_within_sample_summary()`, `plot_bcv()`, `plot_bcv_comparison()`
 - **Utilities:** `read_eds_gc()`, `read_sample_data_improved()`, `set_feature_metadata()`, `extract_feature_vector()`
+
+---
+
+## Dependencies
+
+### Required R packages
+
+This package requires **R version 4.2 or higher**.
+
+#### Core dependencies
+- **Seurat** (>= 4.0.0): Single-cell data structures and workflows
+- **Matrix** (>= 1.3-0): Sparse matrix operations
+- **edgeR** (>= 3.34.0): Dispersion estimation and BCV calculations
+- **Rcpp** (>= 1.0.7): C++ integration for performance-critical operations
+
+#### Data I/O and processing
+- **eds** (>= 1.0.0): Reading Alevin EDS sparse matrix format
+- **tximport** (>= 1.20.0): Transcript-level quantification import
+- **rtracklayer** (>= 1.52.0): GTF file parsing for gene complexity calculations
+- **jsonlite** (>= 1.7.0): JSON data handling
+
+#### Visualization
+- **ggplot2** (>= 3.3.0): Core plotting framework
+- **patchwork** (>= 1.1.0): Combining multiple plots
+- **dplyr** (>= 1.0.0): Data manipulation for summaries
+- **tidyr** (>= 1.1.0): Data reshaping for visualization
+
+#### Parallel processing
+- **parallel**: Built-in R package for multi-core processing
+
+### Development
+
+These packages are necessary for building the vignettes and running tests. You can install them by running the following command:
+
+```r
+install.packages(c("knitr", "rmarkdown", "testthat"))
+```
+
+### System requirements
+
+- **C++ compiler**: Required for compiling Rcpp functions (e.g., g++ >= 7.0 or clang >= 4.0)
+- **OpenMP** (optional): For additional parallelization in C++ code
+- **Memory**: Minimum 64GB RAM recommended for typical datasets (4-8 samples, ~1M cells each)
+- **Storage**: Sufficient space for Alevin bootstrap files (can be several GB per sample)
 
 ---
 
@@ -45,8 +89,6 @@ install.packages("scAmbi.zip", repos = NULL, type = "source")
 # or use devtools:
 # devtools::install("path/to/scAmbi/")
 ```
-
-**Requirements:** R ≥ 4.2. Core Imports include `Seurat`, `edgeR`, `Matrix`, `ggplot2`, `patchwork`, `eds`, `jsonlite`, `tximport`. Install tools like `devtools`, `roxygen2`, `testthat`, `knitr`, `rmarkdown` for development and vignettes.
 
 ---
 
@@ -77,7 +119,7 @@ p <- plot_within_sample_bcv(wres, sample_name = "S1")
 print(p)
 ```
 
-See the vignette for a full, reproducible walkthrough.
+[See the vignette](https://seantbresnahan.com/scambi) for a full, reproducible walkthrough.
 
 ---
 
@@ -88,17 +130,21 @@ To use bootstrap-based OD, run Alevin with cell-level bootstraps enabled so that
 ```bash
 salmon alevin \
   -l ISR \
-  -1 <R1.fastq.gz> -2 <R2.fastq.gz> \
+  -1 example_1.fastq.gz \
+  -2 example_2.fastq.gz \
   --chromiumV3 \
-  -i <txindex> \
-  --whitelist <whitelist.txt> \
+  -i index/transcripts \
+  -p 10 \
+  --whitelist index/3M-february-2018.txt \
   --numCellBootstraps 20 \
-  --dumpFeatures
+  --dumpFeatures \
+  -o quants/example \
+  --tgMap index/tx2g.tsv  # tx-to-tx identity table
 ```
 
 Notes:
 - scAmbi reads the **boot matrix** and associated index files via `eds::readEDS()`.
-- For transcript-centric work, provide a suitable index/mapping
+- For transcript-centric work, provide a suitable index/mapping to Alevin.
 
 ---
 
@@ -111,19 +157,7 @@ browseVignettes("scAmbi")
 devtools::build_vignettes(); browseVignettes("scAmbi")
 ```
 
-The vignette demonstrates OD estimation, Seurat correction, and BCV diagnostics end-to-end.
-
----
-
-## Development
-
-```r
-devtools::document()
-devtools::build_vignettes()
-devtools::check()
-```
-
-GitHub Actions for R CMD check are included. A basic `_pkgdown.yml` is set; run `usethis::use_pkgdown(); pkgdown::build_site()` to publish docs.
+[The vignette](https://seantbresnahan.com/scambi) demonstrates OD estimation, Seurat correction, and BCV diagnostics end-to-end.
 
 ---
 
@@ -136,4 +170,4 @@ GPL-3.
 
 ## Citation
 
-If you use scAmbi, please cite this repository and the tools it builds upon (e.g., Salmon/Alevin, edgeR). A formal CITATION file can be added once a preprint is available.
+If you use scAmbi, please cite this repository and the tools it builds upon (e.g., Salmon/Alevin, edgeR). A formal citation will be added once a preprint is available.

@@ -38,13 +38,13 @@ The object's \code{misc} slot also stores metadata about the correction process.
 }
 \description{
 Generates a Seurat object containing both the original raw counts and an
-overdispersion-corrected count assay. Correction is based on integrated
-estimates from \code{\link{estimate_overdispersion_integrated}}.
+overdispersion-corrected count assay. Default correction is based on bootstrap
+estimates from \code{\link{compute_overdisp_sparse_aware}}.
 }
 \details{
 This function creates a Seurat object with the raw counts stored in the default
 \code{RNA} assay. It then calculates corrected counts by dividing the raw counts
-for each gene by the corresponding integrated overdispersion factor from the
+for each gene by the corresponding bootstrap overdispersion factor from the
 \code{od} object. These corrected counts are stored in a new assay named \code{RNA_corr}.
 
 Both assays are populated with rich feature-level metadata, including the

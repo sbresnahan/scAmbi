@@ -2,7 +2,7 @@
 % Please edit documentation in R/functions.R
 \name{extract_overdispersion}
 \alias{extract_overdispersion}
-\title{Extract Overdispersion Vector (Legacy Support)}
+\title{Extract Overdispersion Vector}
 \usage{
 extract_overdispersion(seurat_list)
 }
@@ -11,16 +11,13 @@ extract_overdispersion(seurat_list)
 }
 \value{
 A named numeric vector of overdispersion values. Returns \code{NULL} if
-neither "OverDisp" nor "OverDisp_integrated" is found in the feature
-metadata.
+"scaling_factor" is not found in the feature metadata.
 }
 \description{
-A wrapper function to extract an overdispersion vector from a list of
-Seurat objects. It provides backward compatibility by first searching for
-a column named "OverDisp" and then falling back to "OverDisp_integrated".
+A wrapper function to extract the default overdispersion vector
+("scaling_factor") from a list of Seurat objects.
 }
 \details{
 This function is a convenient helper that uses
-\code{\link{extract_feature_vector}} to retrieve overdispersion estimates,
-prioritizing the legacy "OverDisp" column name.
+\code{\link{extract_feature_vector}} to retrieve overdispersion estimates.
 }

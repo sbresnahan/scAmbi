@@ -37,7 +37,7 @@ calculation (default: 10).}
 \item{seed}{Integer seed for reproducible grouping (default: 42).}
 
 \item{offset_vector_name}{Optional character string naming a feature metadata vector
-to use as an offset in BCV estimation (e.g., "OverDisp_integrated").}
+to use as an offset in BCV estimation (e.g., "scaling_factor").}
 
 \item{offset_vector_as}{Character scalar, either \code{"od"} (interpret offset vector
 as overdispersion factors) or \code{"ratio"} (interpret as multiplicative ratios
@@ -68,7 +68,7 @@ results <- analyze_within_sample_bcv(
   seurat_list = list(sample1 = seu1, sample2 = seu2),
   assay_names = c("RNA", "RNA_corr"),
   n_groups = 8,
-  offset_vector_name = "OverDisp_integrated"
+  offset_vector_name = "scaling_factor"
 )
 }
 

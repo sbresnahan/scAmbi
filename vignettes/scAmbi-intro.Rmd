@@ -1,7 +1,7 @@
 ---
 title: "scAmbi: Correcting mapping-ambiguity overdispersion in scRNA-seq"
 author: Sean T. Bresnahan
-date: 08-12-2025
+date: "`r Sys.Date()`"
 output:
   rmarkdown::html_vignette:
     toc: true
@@ -28,16 +28,16 @@ knitr::opts_chunk$set(
 
 When quantifying single-cell transcript expression, fragment assignment ambiguity and multi-mapping reads can introduce inferential variance in estimated counts. Salmon/Alevin can output per‑cell bootstrap replicates that capture inferential uncertainty due to fragments mapping to multiple transcripts of the same gene [@srivastava_bayesian_2020; @patro_salmon_2017; @srivastava_alevin_2019]. This uncertainty manifests as **overdispersion** which, if uncorrected, inflates variability estimates and distorts downstream analyses (differential expression, clustering, trajectory inference) [@baldoni_dividing_2024].
 
-Here we provide an integrated approach that (i) estimates per‑gene overdispersion from Alevin bootstraps in a sparse‑aware way, (ii) combines that estimate with moment‑based and annotation‑driven priors, and (iii) applies the result either by **building a corrected assay** (`RNA_corr`) or by **supplying model offsets**. We then evaluate the impact using **BCV** (biological coefficient of variation) analyses at the between‑sample and within‑sample (cell‑to‑cell) levels.
+Here we present [scAmbi](https://github.com/sbresnahan/scAmbi), an integrated approach that (i) estimates per‑transcript overdispersion from Alevin bootstraps in a sparse‑aware way, (ii) combines that estimate with moment‑based and annotation‑driven priors for further exploration, and (iii) applies the boostrap-based overdispersion result either by **building a corrected assay** (`RNA_corr`) or by **supplying model offsets**. We then evaluate the impact using **BCV** (biological coefficient of variation) analyses at the between‑sample and within‑sample (cell‑to‑cell) levels.
 
 ## How this relates to `edgeR::catchSalmon()`
 
-`catchSalmon` (bulk) computes per‑feature technical OD from bootstraps across **samples**, applies EB moderation with a floor at 1, and analyzes **scaled** counts. Our approach is analogous but uses **cells** as replicates, adds a **moment‑based** component and an **annotation prior**, and supports **offset‑based** workflows in addition to a corrected assay.
+`catchSalmon` (bulk) computes per‑transcript technical OD from bootstraps across **samples**, applies EB moderation with a floor at 1, and analyzes **scaled** counts. Our approach is analogous but uses **cells** as replicates. Additionally, scAmbi adds a **moment‑based** component, an **annotation prior**, and an **integrated overdispersion estimate** (boostrap + moment-based + annotation prior) for exploration, and supports **offset‑based** workflows in addition to a corrected assay.
 
 ## What's unique about this package
 
-- **OD_integrated**: weighted geometric fusion of three signals - bootstrap‑based OD, moment‑based OD on normalized counts, and a complexity prior from transcript counts per gene - followed by adaptive shrinkage.
-- **Sparse‑aware C++ kernel**: blockwise processing of the (genes × cells×bootstraps) matrix, strict bounds checking, and efficient dgCMatrix traversal.
+- **OD_integrated**: weighted geometric fusion of three signals: bootstrap‑based OD, moment‑based OD on normalized counts, and a complexity prior from transcript counts per gene, followed by adaptive shrinkage.
+- **Sparse‑aware C++ kernel**: blockwise processing of the (transcripts × cells × bootstraps) matrix, strict bounds checking, and efficient dgCMatrix traversal.
 - **Flexible correction**: use `RNA_corr` directly, or supply offsets constructed from (a) corrected/raw ratios, (b) OD vectors, or (c) any feature vector stored in `feature_meta`.
 - **BCV analysis suite**: between‑sample (pseudobulk across samples) and within‑sample (cell grouping to pseudobulk) pipelines with matched plotting and summaries.
 
@@ -47,7 +47,7 @@ Here we provide an integrated approach that (i) estimates per‑gene overdispers
 
 ## Required R packages
 
-The following R packages are required for full functionality:
+This package requires **R version 4.2 or higher**.
 
 ### Core dependencies
 - **Seurat** (>= 4.0.0): Single-cell data structures and workflows
@@ -70,12 +70,40 @@ The following R packages are required for full functionality:
 ### Parallel processing
 - **parallel**: Built-in R package for multi-core processing
 
+### Development
+
+These packages are necessary for building the vignettes and running tests. You can install them by running the following command:
+
+```{r,eval=F}
+install.packages(c("knitr", "rmarkdown", "testthat"))
+```
+
 ## System requirements
 
 - **C++ compiler**: Required for compiling Rcpp functions (e.g., g++ >= 7.0 or clang >= 4.0)
 - **OpenMP** (optional): For additional parallelization in C++ code
 - **Memory**: Minimum 64GB RAM recommended for typical datasets (4-8 samples, ~1M cells each)
 - **Storage**: Sufficient space for Alevin bootstrap files (can be several GB per sample)
+
+---
+
+# Installation
+
+## From GitHub (recommended)
+
+```{r,eval=F}
+# install.packages("remotes")
+remotes::install_github("sbresnahan/scAmbi")
+```
+
+## From a local source tarball/zip
+
+```{r,eval=F}
+# If you have scAmbi.zip or a source tar.gz:
+install.packages("scAmbi.zip", repos = NULL, type = "source")
+# or use devtools:
+# devtools::install("path/to/scAmbi/")
+```
 
 ---
 
@@ -94,13 +122,13 @@ With biological variation across cells, \(\pi_{gi}\) varies and marginal varianc
 \mathrm{Var}(y_{gi})\;=\;\sigma_g^2\,\mu_{gi}\; +\; \phi_g\,\mu_{gi}^2,
 \]
 
-with \(\phi_g\) the NB-like biological dispersion.
+with \(\phi_g\) the NB-like biological dispersion[@baldoni_dividing_2024].
 
 ---
 
-# Integrated overdispersion estimator (\(\mathrm{OD}^{\mathrm{int}}\))
+# Integrated overdispersion estimation
 
-We compute three components per transcript and combine them on the log scale.
+By default, scAmbi uses a boostrap-based overdispersion estimate following Baldoni *et al.*[@baldoni_dividing_2024] for correction. For exploratory purposes, it also computes two additional components per transcript and an integrated estimate by combining the three components on the log scale.
 
 ## 1) Bootstrap-based component (sparse-aware)
 
@@ -145,7 +173,8 @@ clamped to \(\ge 1\). Transcripts with \(e_t\) below the expression threshold de
 
 **Notes:**  
 1. We use \(k = B\) for seen transcripts and compute an inflation factor \(1 + s^2/\mu\), ensuring that any non-zero bootstrap variance produces \(\mathrm{OD} > 1\).  
-2. If **gene-level** OD is desired, aggregate *after* estimating transcript-level OD (e.g., gene-wise median or counts-weighted mean of transcript ODs).
+2. If **gene-level** OD is desired, aggregate *after* estimating transcript-level OD (e.g., gene-wise median or counts-weighted mean of transcript ODs).  
+3. $\mathrm{OD}^{\mathrm{boot}}_t$ is the default OD estimate for correction.
 
 ## 2) Moment-based component (on normalized counts)
 
@@ -193,12 +222,14 @@ then clamp to \([1,100]\).
 
 We expose multiple, interchangeable ways to use the OD estimates.
 
+Note: $\mathrm{OD}^{\mathrm{boot}}_t$ is the default OD estimate for correction.
+
 ## A) Build a corrected assay (`RNA_corr`)
 
-Form a left-diagonal scaling with entries \(1/\mathrm{OD}^{\mathrm{int,final}}_t\):
+Form a left-diagonal scaling with entries \(1/\mathrm{OD}^{\mathrm{boot}}_t\):
 
 \[
-Z = \mathrm{diag}\left(\frac{1}{\mathrm{OD}^{\mathrm{int,final}}}\right)\,Y,
+Z = \mathrm{diag}\left(\frac{1}{\mathrm{OD}^{\mathrm{boot}}}\right)\,Y,
 \]
 
 and store it as a second assay `RNA_corr` alongside the raw `RNA` counts. Feature-level metadata (`feature_meta`) is stored in both assays with columns:
@@ -226,23 +257,23 @@ We quantify how correction impacts variability using **BCV** from **edgeR** in t
 
 ## 1) Between‑sample BCV (pseudobulk across samples)
 
-1. Build a genes × samples pseudobulk by summing counts per sample.
+1. Build a transcripts × samples pseudobulk by summing counts per sample.
 2. Option A - **Direct**: run BCV on `RNA_corr` pseudobulk.    Option B - **Offsets**: run BCV on raw pseudobulk but add offsets:
-   - `offset_ratio`: from `pb_corr/pb_raw` (gene × sample).
-   - `offset_od`: from an OD vector (gene‑only; applied to all samples).
+   - `offset_ratio`: from `pb_corr/pb_raw` (transcript × sample).
+   - `offset_od`: from an OD vector (applied to all samples).
    - `offset_vector`: from any `feature_meta` column.
 3. Plot tagwise BCV vs AveLogCPM with common and trended curves; compare RNA vs corrected.
 
-**Interpretation.** Post‑correction, BCV typically decreases for ambiguous genes and the abundance‑dependent trend stabilizes.
+**Interpretation.** Post‑correction, BCV typically decreases for ambiguous features and the abundance‑dependent trend stabilizes.
 
 ## 2) Within‑sample (cell‑to‑cell) BCV
 
-1. Randomly partition cells within a sample into \(G\) groups (defaults: \(G=10\), \(\ge\)50 cells each).
-2. Build a genes × groups pseudobulk by summing counts per group.
-3. Compute BCV per sample. Offsets may be added using any **feature vector** (gene‑only), mirroring the between‑sample options.
+1. Randomly partition cells within a sample into \(G\) groups.
+2. Build a transcripts × groups pseudobulk by summing counts per group.
+3. Compute BCV per sample. Offsets may be added using any **feature vector**, mirroring the between‑sample options.
 4. Summarize across samples and visualize (per‑sample plots and an overall summary).
 
-**Interpretation.** A successful correction reduces within‑sample (cell‑to‑cell) BCV, especially for highly ambiguous genes, without artificially flattening true biological variability.
+**Interpretation.** A successful correction reduces within‑sample (cell‑to‑cell) BCV, especially for highly ambiguous transcripts, without artificially flattening true biological variability.
 
 ---
 
@@ -353,7 +384,7 @@ for (i in 1:length(objs)) {
   cat("\n", strrep("=", 50), "\n")
   cat("Sample:", SRA[i], "\n")
   cat("Cells:", ncol(seu), "\n")
-  cat("Genes:", nrow(seu), "\n")
+  cat("Transcripts:", nrow(seu), "\n")
   cat("Overdispersion stats:\n")
   cat("  Median:", median(fm$OverDisp_integrated), "\n")
   cat("  % > 1.5:", mean(fm$OverDisp_integrated > 1.5) * 100, "%\n")
@@ -381,14 +412,14 @@ BCV ANALYSIS SUMMARY (between-sample)
 
 >>> RNA:
     samples: 4
-    Genes analyzed: 14998
+    Transcripts analyzed: 14998
     Common BCV: 0.3653
     Median tagwise BCV: 0.2585
     BCV range: [0.0099, 1.4729]
 
 >>> RNA_corr:
     samples: 4
-    Genes analyzed: 14568
+    Transcripts analyzed: 14568
     Common BCV: 0.3573
     Median tagwise BCV: 0.2455
     BCV range: [0.0099, 1.4491]

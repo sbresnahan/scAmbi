@@ -14,7 +14,7 @@ extract_feature_vector(
 \item{seurat_list}{A list of Seurat objects.}
 
 \item{vector_name}{The character name of the column to extract from the
-feature metadata data frame (e.g., "OverDisp_integrated").}
+feature metadata data frame (e.g., "scaling_factor").}
 
 \item{prefer_assays}{A character vector of assay names to search, in order
 of preference (e.g., \code{c("RNA_corr", "RNA")}).}

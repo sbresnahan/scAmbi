@@ -23,7 +23,7 @@ transcript annotations (GTF files).
 overdispersion factor for each transcript using a weighted geometric mean and
 empirical Bayes shrinkage.
 \item \strong{Correction}: Generates a new, corrected data assay within a Seurat object
-where raw counts are adjusted by the integrated overdispersion factors by default.
+where raw counts are adjusted by the bootstrap scaling factors by default.
 Vectors for each estimate are also stored for manual correction.
 \item \strong{Evaluation}: Offers tools to calculate and visualize the Biological
 Coefficient of Variation (BCV) both within a single sample (across pseudo-bulk
