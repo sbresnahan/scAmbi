@@ -9,7 +9,6 @@ estimate_overdispersion_integrated(
   alevin_dir,
   n_boot,
   gene_names = NULL,
-  gtf_file = NULL,
   transcript_info = NULL,
   method_weights = c(bootstrap = 0.3, moments = 0.5, prior = 0.2),
   min_cells_expr = 10,
@@ -29,8 +28,6 @@ Alevin output.}
 \item{gene_names}{Optional character vector of gene names (length equal to
 number of rows in \code{counts}). If \code{NULL}, rownames of \code{counts}
 are used.}
-
-\item{gtf_file}{Optional path to a GTF file for computing transcript complexity.}
 
 \item{transcript_info}{Optional path to a transcript info table for computing
 transcript complexity (must contain \code{gene_id} column).}
@@ -61,7 +58,7 @@ A list with elements:
 \description{
 Estimates per-gene overdispersion by integrating three complementary methods:
 (1) bootstrap-based estimation from Alevin output, (2) method-of-moments
-estimation from normalized counts, and (3) a complexity-based prior
+estimation from normalized counts, and (3) an entropy-based complexity prior
 from transcript annotation. Produces a weighted geometric mean of the three
 methods, followed by empirical Bayes shrinkage.
 }

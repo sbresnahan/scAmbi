@@ -18,42 +18,79 @@ compute_overdisp_sparse_aware(
 }
 \arguments{
 \item{alevin_dir}{Path to the Alevin output directory containing
-\code{quants_boot_mat.gz} and associated index files.}
+\code{quants_boot_mat.gz} and associated index files (\code{quants_mat_cols.txt}
+and \code{quants_mat_rows.txt}).}
 
-\item{n_boot}{Integer; number of bootstrap replicates per cell.}
+\item{n_boot}{Integer; number of bootstrap replicates per cell used in
+Alevin quantification.}
 
 \item{block_cells}{Integer; number of cells to process in each parallel block
-(e.g., 256). A larger size may be faster but uses more memory.}
+for memory efficiency. Default is 256. Larger values may be faster but
+use more memory.}
 
-\item{n_cores}{Integer; number of parallel cores to use for processing.}
+\item{n_cores}{Integer; number of parallel cores to use for processing.
+Default uses all available cores minus 1.}
 
 \item{omp_threads}{Integer; number of threads for low-level OpenMP/BLAS
-operations within the C++ code.}
+operations within the C++ computation code. Default is 2.}
 
-\item{min_cells_expr}{Integer; minimum number of cells a gene must be
-expressed in to receive a non-trivial overdispersion estimate.}
+\item{min_cells_expr}{Integer; minimum number of cells a transcript must be
+expressed in to receive a non-trivial overdispersion estimate. Transcripts
+below this threshold are assigned overdispersion = 1. Default is 10.}
 
-\item{pseudocount}{Numeric; a small value added to the mean in the
-overdispersion calculation (\code{var / (mean + pseudocount)}) to prevent
-division by zero.}
+\item{pseudocount}{Numeric; small value added to the mean in the
+overdispersion calculation (variance / (mean + pseudocount)) to prevent
+division by zero and provide numerical stability. Default is 0.1.}
 
-\item{verbose}{Logical; if \code{TRUE}, print progress messages.}
+\item{verbose}{Logical; if \code{TRUE}, print progress messages during computation.}
 
-\item{debug_first_block}{Logical; if \code{TRUE}, the first block is run in
-serial to provide clearer error messages for debugging.}
+\item{debug_first_block}{Logical; if \code{TRUE}, the first block is processed
+serially to provide clearer error messages for debugging. Default is \code{FALSE}.}
 }
 \value{
 A list containing:
 \describe{
-\item{\code{OverDisp}}{A numeric vector of the final per-gene overdispersion estimates.}
-\item{\code{DF}}{An integer vector of the number of cells contributing to each gene's estimate (degrees of freedom).}
-\item{\code{features}}{A character vector of the gene IDs.}
-\item{\code{expr_cells}}{A numeric vector of the total number of cells in which each gene was expressed.}
+\item{\code{OverDisp}}{A numeric vector of the final per-transcript overdispersion estimates.}
+\item{\code{DF}}{An integer vector of the number of cells contributing to each transcript's estimate.}
+\item{\code{features}}{A character vector of the transcript IDs.}
+\item{\code{expr_cells}}{A numeric vector of the total number of cells in which each transcript was expressed.}
 }
 }
 \description{
-Estimates per-gene overdispersion from Alevin's bootstrap matrices using a
-memory-efficient, block-wise computation strategy. This function averages
-per-cell overdispersion estimates for each gene and applies light shrinkage
-for robustness.
+Estimates per-transcript overdispersion from Alevin's bootstrap matrices using a
+memory-efficient, block-wise computation strategy. For each transcript and cell,
+computes bootstrap variance across replicates and converts to an overdispersion
+inflation factor. The final estimate averages these per-cell overdispersion
+values across all expressing cells and applies empirical Bayes moderation.
+}
+\details{
+The bootstrap-based overdispersion estimation works as follows:
+
+\strong{Per-cell computation}: For each transcript-cell combination where the transcript has
+at least one non-zero bootstrap value, the function computes the sample mean
+and variance across all B bootstrap replicates (including zeros):
+\deqn{\bar{u}_{ti} = \frac{1}{B} \sum_{b=1}^B u_{tib}}
+\deqn{s^2_{ti} = \frac{1}{B-1} \sum_{b=1}^B (u_{tib} - \bar{u}_{ti})^2}
+
+The per-cell overdispersion inflation factor is then:
+\deqn{OD_{t,i} = 1 + \frac{s^2_{ti}}{\bar{u}_{ti} + \varepsilon}}
+
+where \eqn{\varepsilon} is the pseudocount parameter.
+
+\strong{Transcript-level aggregation}: The per-cell overdispersion values are summed
+across all expressing cells for each transcript, along with the count of contributing
+cells (degrees of freedom). The raw transcript-level estimate is:
+\deqn{\widehat{OD}^{boot}_t = \frac{\sum_i OD_{t,i}}{DF_t}}
+
+\strong{Empirical Bayes moderation}: To reduce noise in estimates from transcripts with
+few expressing cells, the raw estimates are moderated toward a data-driven
+prior using:
+\deqn{OD^{boot}_t = \frac{d_0 \cdot Prior + DF_t \cdot \widehat{OD}^{boot}_t}{d_0 + DF_t}}
+
+where the prior is the median of raw estimates > 1, and \eqn{d_0 = 10} is
+the prior degrees of freedom. Final estimates are constrained to be \eqn{\geq 1}.
+
+This approach captures both technical and biological variability by leveraging
+the bootstrap uncertainty in transcript quantification, providing more robust
+overdispersion estimates than moment-based methods alone.
 }

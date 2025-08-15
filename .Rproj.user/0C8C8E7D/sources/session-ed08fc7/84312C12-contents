@@ -54,6 +54,7 @@ utils::globalVariables(c(
 #' @importFrom rtracklayer import
 #' @useDynLib scAmbi, .registration = TRUE
 #' @importFrom Rcpp sourceCpp
+#' @importFrom stats setNames
 "_PACKAGE"
 
 
@@ -88,82 +89,77 @@ read_eds_gc <- function(path, n_feat, n_cells, label) {
 }
 
 
-#' Calculate Gene Complexity from Transcript Annotations
-#'
-#' Computes the number of transcripts associated with each gene from a GTF or
-#' a pre-processed transcript information file. This metric can be used to
-#' inform a prior on mapping ambiguity.
-#'
-#' @param gtf_file Character string; path to a GTF file containing transcript
-#'   annotations. This is used if `transcript_info_file` is not provided.
-#' @param transcript_info_file Character string; path to a tab-delimited file
-#'   with a `gene_id` column. If provided, this file is used in preference to
-#'   the GTF file.
-#'
-#' @return A named numeric vector where each element is the number of transcripts
-#'   for a gene and the name is the gene ID. Returns `NULL` if neither input
-#'   file is provided or accessible.
-#'
-#' @importFrom rtracklayer import
-#' @examples
-#' \dontrun{
-#' # From a pre-processed transcript info file
-#' complexity <- get_gene_complexity(transcript_info_file = "tx_info.tsv")
-#'
-#' # From a GTF annotation file
-#' complexity <- get_gene_complexity(gtf_file = "annotation.gtf")
-#' }
-#' @export
-
-
-get_gene_complexity <- function(gtf_file = NULL, transcript_info_file = NULL) {
-  if (!is.null(transcript_info_file) && file.exists(transcript_info_file)) {
-    tx_info <- read.table(transcript_info_file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-    gene_complexity <- table(tx_info$gene_id)
-    return(as.numeric(gene_complexity))
-  } else if (!is.null(gtf_file) && file.exists(gtf_file)) {
-    gtf <- rtracklayer::import(gtf_file)
-    transcripts <- gtf[gtf$type == "transcript"]
-    gene_complexity <- table(transcripts$gene_id)
-    return(as.numeric(gene_complexity))
-  } else {
-    return(NULL)
-  }
-}
-
-
-
 #' Compute Overdispersion from Alevin Bootstraps
 #'
-#' Estimates per-gene overdispersion from Alevin's bootstrap matrices using a
-#' memory-efficient, block-wise computation strategy. This function averages
-#' per-cell overdispersion estimates for each gene and applies light shrinkage
-#' for robustness.
+#' Estimates per-transcript overdispersion from Alevin's bootstrap matrices using a
+#' memory-efficient, block-wise computation strategy. For each transcript and cell,
+#' computes bootstrap variance across replicates and converts to an overdispersion
+#' inflation factor. The final estimate averages these per-cell overdispersion
+#' values across all expressing cells and applies empirical Bayes moderation.
 #'
 #' @param alevin_dir Path to the Alevin output directory containing
-#'   `quants_boot_mat.gz` and associated index files.
-#' @param n_boot Integer; number of bootstrap replicates per cell.
+#'   `quants_boot_mat.gz` and associated index files (`quants_mat_cols.txt`
+#'   and `quants_mat_rows.txt`).
+#' @param n_boot Integer; number of bootstrap replicates per cell used in
+#'   Alevin quantification.
 #' @param block_cells Integer; number of cells to process in each parallel block
-#'   (e.g., 256). A larger size may be faster but uses more memory.
+#'   for memory efficiency. Default is 256. Larger values may be faster but
+#'   use more memory.
 #' @param n_cores Integer; number of parallel cores to use for processing.
+#'   Default uses all available cores minus 1.
 #' @param omp_threads Integer; number of threads for low-level OpenMP/BLAS
-#'   operations within the C++ code.
-#' @param min_cells_expr Integer; minimum number of cells a gene must be
-#'   expressed in to receive a non-trivial overdispersion estimate.
-#' @param pseudocount Numeric; a small value added to the mean in the
-#'   overdispersion calculation (`var / (mean + pseudocount)`) to prevent
-#'   division by zero.
-#' @param verbose Logical; if `TRUE`, print progress messages.
-#' @param debug_first_block Logical; if `TRUE`, the first block is run in
-#'   serial to provide clearer error messages for debugging.
+#'   operations within the C++ computation code. Default is 2.
+#' @param min_cells_expr Integer; minimum number of cells a transcript must be
+#'   expressed in to receive a non-trivial overdispersion estimate. Transcripts
+#'   below this threshold are assigned overdispersion = 1. Default is 10.
+#' @param pseudocount Numeric; small value added to the mean in the
+#'   overdispersion calculation (variance / (mean + pseudocount)) to prevent
+#'   division by zero and provide numerical stability. Default is 0.1.
+#' @param verbose Logical; if `TRUE`, print progress messages during computation.
+#' @param debug_first_block Logical; if `TRUE`, the first block is processed
+#'   serially to provide clearer error messages for debugging. Default is `FALSE`.
+#'
+#' @details
+#' The bootstrap-based overdispersion estimation works as follows:
+#' 
+#' **Per-cell computation**: For each transcript-cell combination where the transcript has
+#' at least one non-zero bootstrap value, the function computes the sample mean
+#' and variance across all B bootstrap replicates (including zeros):
+#' \deqn{\bar{u}_{ti} = \frac{1}{B} \sum_{b=1}^B u_{tib}}
+#' \deqn{s^2_{ti} = \frac{1}{B-1} \sum_{b=1}^B (u_{tib} - \bar{u}_{ti})^2}
+#' 
+#' The per-cell overdispersion inflation factor is then:
+#' \deqn{OD_{t,i} = 1 + \frac{s^2_{ti}}{\bar{u}_{ti} + \varepsilon}}
+#' 
+#' where \eqn{\varepsilon} is the pseudocount parameter.
+#' 
+#' **Transcript-level aggregation**: The per-cell overdispersion values are summed
+#' across all expressing cells for each transcript, along with the count of contributing
+#' cells (degrees of freedom). The raw transcript-level estimate is:
+#' \deqn{\widehat{OD}^{boot}_t = \frac{\sum_i OD_{t,i}}{DF_t}}
+#' 
+#' **Empirical Bayes moderation**: To reduce noise in estimates from transcripts with
+#' few expressing cells, the raw estimates are moderated toward a data-driven
+#' prior using:
+#' \deqn{OD^{boot}_t = \frac{d_0 \cdot Prior + DF_t \cdot \widehat{OD}^{boot}_t}{d_0 + DF_t}}
+#' 
+#' where the prior is the median of raw estimates > 1, and \eqn{d_0 = 10} is
+#' the prior degrees of freedom. Final estimates are constrained to be \eqn{\geq 1}.
+#' 
+#' This approach captures both technical and biological variability by leveraging
+#' the bootstrap uncertainty in transcript quantification, providing more robust
+#' overdispersion estimates than moment-based methods alone.
 #'
 #' @return A list containing:
 #' \describe{
-#'   \item{`OverDisp`}{A numeric vector of the final per-gene overdispersion estimates.}
-#'   \item{`DF`}{An integer vector of the number of cells contributing to each gene's estimate (degrees of freedom).}
-#'   \item{`features`}{A character vector of the gene IDs.}
-#'   \item{`expr_cells`}{A numeric vector of the total number of cells in which each gene was expressed.}
+#'   \item{`OverDisp`}{A numeric vector of the final per-transcript overdispersion estimates.}
+#'   \item{`DF`}{An integer vector of the number of cells contributing to each transcript's estimate.}
+#'   \item{`features`}{A character vector of the transcript IDs.}
+#'   \item{`expr_cells`}{A numeric vector of the total number of cells in which each transcript was expressed.}
 #' }
+#' 
+#' @importFrom parallel detectCores mclapply
+#' @importFrom methods as
 #' @export
 
 
@@ -283,119 +279,271 @@ compute_overdisp_sparse_aware <- function(
 #'
 #' Computes per-gene overdispersion estimates from a counts matrix
 #' using a method-of-moments approach. Optionally normalizes counts
-#' by size factors before estimation.
+#' by size factors before estimation. Uses only nonzero (expressing)
+#' cells for variance calculations and applies shrinkage toward 1
+#' based on sample size.
 #'
 #' @param counts A numeric or sparse matrix of gene-by-cell counts.
+#'   Automatically converted to dgCMatrix format if needed.
 #' @param min_cells Minimum number of cells with nonzero expression
-#'   required for a gene to be included in estimation. Transcripts with fewer
-#'   than this number are assigned an overdispersion of 1.
+#'   required for a gene to be included in estimation. Genes with fewer
+#'   expressing cells are assigned an overdispersion of 1. Default is 10.
 #' @param size_factors Optional numeric vector of size factors for each
-#'   cell. If \code{NULL}, they are computed as the column sums of
-#'   \code{counts}, median-scaled to 1.
+#'   cell. If \code{NULL} (default), no normalization is applied (recommended
+#'   if counts are already normalized). Invalid or non-positive values are
+#'   replaced with the median of valid size factors.
+#' @param rel_eps Relative epsilon for stabilization. If > 0, adds
+#'   \code{rel_eps * mean} to both numerator and denominator. If 0 (default),
+#'   uses absolute epsilon instead.
+#' @param abs_eps Absolute epsilon for stabilization when \code{rel_eps = 0}.
+#'   Adds this constant to both numerator and denominator. Default is 1e-8.
+#' @param shrink_k Shrinkage parameter controlling how strongly estimates
+#'   are shrunk toward 1. Higher values increase shrinkage. The confidence
+#'   weight is computed as \code{n_cells / (n_cells + shrink_k)}. Default is 30.
 #'
 #' @details
-#' For each gene, nonzero expression values are used to compute the mean
-#' and variance. A pseudocount of 0.1 is added to both before computing
-#' overdispersion (\eqn{OD = (var + 0.1) / (mean + 0.1)}). The estimate
-#' is then shrunk toward 1 based on the number of expressing cells, with
-#' stronger shrinkage for small sample sizes.
+#' For each gene, only nonzero expression values from expressing cells are
+#' used to compute the sample mean and variance. The method-of-moments
+#' overdispersion estimate is computed as:
+#' \deqn{OD_{raw} = \frac{var + \epsilon_{num}}{mean + \epsilon_{den}}}
+#' 
+#' The epsilon terms provide numerical stabilization and can be either relative
+#' or absolute. When \code{rel_eps > 0}, both epsilon terms equal 
+#' \code{rel_eps * mean}. When \code{rel_eps = 0} (default), both epsilon 
+#' terms equal \code{abs_eps}.
+#' 
+#' The raw estimate is then shrunk toward 1 using:
+#' \deqn{OD_{shrunk} = 1 + \frac{n}{n + k} \times (OD_{raw} - 1)}
+#' 
+#' where \code{n} is the number of expressing cells and \code{k} is the
+#' shrinkage parameter. This reduces noise in estimates from genes with
+#' few expressing cells.
 #'
-#' @return A numeric vector of overdispersion estimates (length equal to
-#'   the number of genes).
+#' Genes with fewer than \code{min_cells} expressing cells are assigned
+#' an overdispersion of 1. Negative variances (which can occur with small
+#' sample sizes) are set to 0 before overdispersion calculation.
 #'
-#' @importFrom Matrix colSums Diagonal
+#' @return A numeric vector of overdispersion estimates with length equal to
+#'   the number of genes (rows) in the input matrix. Values are constrained
+#'   to be >= 1.
+#'
+#' @importFrom Matrix colSums Matrix
+#' @importFrom methods as
+#' @importFrom stats median
 #' @export
 
 
-estimate_overdispersion_moments <- function(counts, min_cells = 10, size_factors = NULL) {
+estimate_overdispersion_moments <- function(
+    counts,
+    min_cells = 10,
+    size_factors = NULL,   # NULL = no normalization (recommended if counts already normalized)
+    rel_eps = 0.0,         # 0 by default (use tiny absolute eps instead)
+    abs_eps = 1e-8,
+    shrink_k = 30
+) {
+  # Ensure Csparse
+  if (!inherits(counts, "Matrix")) counts <- Matrix::Matrix(counts, sparse = TRUE)
+  if (!inherits(counts, "CsparseMatrix")) counts <- methods::as(counts, "CsparseMatrix")
+  if (!inherits(counts, "dgCMatrix")) counts <- methods::as(counts, "dgCMatrix")
+  
+  G <- nrow(counts); C <- ncol(counts)
+  
+  # ----- size factors (optional) -----
   if (is.null(size_factors)) {
-    size_factors <- Matrix::colSums(counts)
-    size_factors <- size_factors / median(size_factors[size_factors > 0])
-  }
-  counts_norm <- counts %*% Matrix::Diagonal(x = 1 / size_factors)
-  
-  n_genes <- nrow(counts_norm)
-  od_estimates <- numeric(n_genes)
-  
-  for (g in 1:n_genes) {
-    gene_expr <- as.numeric(counts_norm[g, ])
-    expr_nonzero <- gene_expr[gene_expr > 0]
-    if (length(expr_nonzero) < min_cells) {
-      od_estimates[g] <- 1
-    } else {
-      mu <- mean(expr_nonzero)
-      var_obs <- var(expr_nonzero)
-      od <- (var_obs + 0.1) / (mu + 0.1)
-      n <- length(expr_nonzero)
-      confidence <- n / (n + 30)
-      od_shrunk <- 1 + confidence * (od - 1)
-      od_estimates[g] <- max(od_shrunk, 1)
-    }
+    inv_sf <- rep(1, C)            # <- no scaling
+  } else {
+    sf <- as.numeric(size_factors)
+    if (length(sf) != C) stop("size_factors length must equal ncol(counts)")
+    pos_med <- stats::median(sf[sf > 0 & is.finite(sf)])
+    if (!is.finite(pos_med) || pos_med <= 0) stop("No valid positive size_factors available.")
+    sf[!is.finite(sf) | sf <= 0] <- pos_med
+    inv_sf <- 1 / sf
   }
   
-  .log("[OD Moments] range: min=%.3f, med=%.3f, max=%.3f, pct>1.5=%.1f%%",
-       min(od_estimates), median(od_estimates), max(od_estimates),
-       mean(od_estimates > 1.5) * 100)
-  od_estimates
+  # ----- accumulate over NONZERO entries only (expressing cells) -----
+  sums   <- numeric(G)
+  sumsqs <- numeric(G)
+  n_exp  <- integer(G)
+  
+  p <- counts@p; i <- counts@i; x <- counts@x
+  for (cj in seq_len(C)) {
+    start <- p[cj] + 1L; end <- p[cj + 1L]
+    if (start > end) next
+    idx  <- start:end
+    rows <- i[idx] + 1L
+    vals <- x[idx] * inv_sf[cj]     # optional normalization
+    sums[rows]   <- sums[rows]   + vals
+    sumsqs[rows] <- sumsqs[rows] + vals * vals
+    n_exp[rows]  <- n_exp[rows]  + 1L
+  }
+  
+  od <- rep_len(1, G)
+  
+  # require enough expressing cells
+  min_cells_eff <- min(min_cells, C)
+  keep <- n_exp >= min_cells_eff
+  if (!any(keep)) {
+    message(sprintf("[OD Moments] genes_kept=0/%d (C=%d). All ODs set to 1.", G, C))
+    return(od)
+  }
+  
+  n   <- n_exp[keep]
+  m   <- sums[keep] / n
+  var <- (sumsqs[keep] - n * m * m) / pmax.int(n - 1L, 1L)
+  var[!is.finite(var) | var < 0] <- 0
+  
+  # stabilizers
+  eps_num <- if (rel_eps > 0) rel_eps * m else abs_eps
+  eps_den <- if (rel_eps > 0) rel_eps * m else abs_eps
+  
+  od_raw <- (var + eps_num) / (m + eps_den)
+  
+  # shrink toward 1
+  conf   <- n / (n + shrink_k)
+  od_shr <- 1 + conf * (od_raw - 1)
+  
+  od[keep] <- pmax(od_shr, 1)
+  od[!is.finite(od)] <- 1
+  
+  message(sprintf(
+    "[OD Moments] genes_kept=%d/%d | min=%.3f med=%.3f max=%.3f pct>1.2=%.1f%%",
+    sum(keep), G, min(od), stats::median(od), max(od), mean(od > 1.2) * 100
+  ))
+  od
 }
 
 
-#' Calculate complexity-based prior for overdispersion
+#' Calculate complexity-based prior for overdispersion using entropy
 #'
-#' Computes a per-gene prior scaling factor for overdispersion estimates
-#' based on transcript complexity, using either a transcript info table
-#' or a GTF annotation file.
+#' Computes a per-transcript prior scaling factor for overdispersion estimates
+#' based on transcript complexity within genes. The complexity measure combines
+#' the number of expressed isoforms per gene with their expression evenness
+#' (entropy), providing stronger priors for transcripts from genes with more 
+#' diverse isoform expression patterns.
 #'
-#' @param gene_names Character vector of gene IDs for which to compute the prior.
-#' @param gtf_file Optional path to a GTF file containing transcript annotations.
-#'   If provided and \code{transcript_info} is not given, transcript counts per
-#'   gene will be computed from this file.
-#' @param transcript_info Optional path to a tab-delimited file containing
-#'   transcript metadata with a \code{gene_id} column. Used to count transcripts
-#'   per gene.
+#' @param counts A numeric or sparse matrix of transcript-by-cell counts.
+#'   Rows represent transcripts, columns represent cells. Automatically
+#'   converted to sparse Matrix format if needed.
+#' @param transcript_info Either a data.frame or path to a tab-delimited file
+#'   containing transcript-to-gene mapping. Must include columns specified by
+#'   \code{id_col_tx} and \code{id_col_gene}.
+#' @param features Character vector of transcript IDs in the desired output
+#'   order. These should match the transcript IDs in \code{transcript_info}
+#'   and typically correspond to rownames of \code{counts}.
+#' @param id_col_tx Name of the column in \code{transcript_info} containing
+#'   transcript IDs. Default is "transcript_id".
+#' @param id_col_gene Name of the column in \code{transcript_info} containing
+#'   gene IDs. Default is "gene_id".
+#' @param expr_threshold Minimum mean expression threshold for a transcript
+#'   to be considered "expressed" and included in complexity calculations.
+#'   Default is 0 (include all transcripts).
+#' @param alpha Scaling parameter controlling the strength of the complexity
+#'   prior. Recommended range is 0.3-1.0. Higher values increase the
+#'   influence of complexity on the prior. Default is 0.6.
 #'
 #' @details
-#' For each gene, the number of transcripts is counted, and the prior scaling
-#' factor is computed as:
-#' \deqn{prior = 1 + 0.3 \times \log1p(n\_transcripts - 1)}
-#' Genes absent from the annotation are assigned a prior of 1.0.
+#' The function computes transcript complexity using a two-step process:
+#' 
+#' 1. **Isoform counting**: For each gene, count the number of expressed
+#'    isoforms (transcripts with mean expression > \code{expr_threshold}).
+#'    
+#' 2. **Expression evenness**: Calculate the normalized Shannon entropy
+#'    of isoform expression within each gene:
+#'    \deqn{E_g = \frac{H_g}{\log(k_g)} = \frac{-\sum_i p_i \log(p_i)}{\log(k_g)}}
+#'    where \eqn{p_i} is the proportion of total gene expression from isoform \eqn{i},
+#'    and \eqn{k_g} is the number of expressed isoforms in gene \eqn{g}.
+#'    
+#' The prior scaling factor for each transcript is then computed as:
+#' \deqn{prior = 1 + \alpha \times \log(1 + \max(k_g - 1, 0) \times \max(E_g, 0))}
+#' 
+#' This formulation gives higher prior values to transcripts from genes with:
+#' more expressed isoforms (\eqn{k_g > 1}) and more even expression across 
+#' isoforms (\eqn{E_g} closer to 1).
+#' 
+#' Transcripts from genes with only one expressed isoform or unmapped
+#' transcripts receive a prior value of 1.0 (no adjustment).
 #'
-#' @return A numeric vector of prior scaling factors (length equal to the number
-#'   of genes), where larger values correspond to higher transcript complexity.
+#' @return A numeric vector of prior scaling factors with length equal to
+#'   \code{length(features)}. Values are >= 1, where larger values indicate
+#'   higher transcript complexity within the gene context.
 #'
-#' @importFrom rtracklayer import
+#' @importFrom Matrix Matrix rowSums rowMeans
+#' @importFrom utils read.table
+#' @importFrom stats median
 #' @export
 
 
-calculate_complexity_prior <- function(gene_names, gtf_file = NULL, transcript_info = NULL) {
-  n_genes <- length(gene_names)
-  prior <- rep(1.0, n_genes)
+calculate_complexity_prior <- function(
+    counts,                  # transcripts x cells (dgCMatrix ok)
+    transcript_info,         # data.frame or TSV with transcript_id, gene_id
+    features,                # vector of transcript_ids in the desired output order
+    id_col_tx = "transcript_id",
+    id_col_gene = "gene_id",
+    expr_threshold = 0,      # treat transcripts with mean > threshold as expressed
+    alpha = 0.6              # scale factor (tune 0.3–1.0)
+) {
+  if (!inherits(counts, "Matrix")) counts <- Matrix::Matrix(counts, sparse = TRUE)
+  # load mapping
+  if (is.character(transcript_info) && file.exists(transcript_info)) {
+    transcript_info <- utils::read.table(transcript_info, header = TRUE, sep = "\t",
+                                         stringsAsFactors = FALSE, quote = "", comment.char = "")
+  }
+  stopifnot(all(c(id_col_tx, id_col_gene) %in% colnames(transcript_info)))
+  map <- transcript_info[, c(id_col_tx, id_col_gene)]
+  colnames(map) <- c("transcript_id","gene_id")
   
-  if (!is.null(transcript_info) && file.exists(transcript_info)) {
-    tx_info <- read.table(transcript_info, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-    tx_per_gene <- table(tx_info$gene_id)
-    for (i in 1:n_genes) {
-      gene <- gene_names[i]
-      if (gene %in% names(tx_per_gene)) {
-        n_transcripts <- as.numeric(tx_per_gene[gene])
-        prior[i] <- 1 + 0.3 * log1p(n_transcripts - 1)
-      }
-    }
-  } else if (!is.null(gtf_file) && file.exists(gtf_file)) {
-    gtf <- rtracklayer::import(gtf_file)
-    transcripts <- gtf[gtf$type == "transcript"]
-    tx_per_gene <- table(transcripts$gene_id)
-    for (i in 1:n_genes) {
-      gene <- gene_names[i]
-      if (gene %in% names(tx_per_gene)) {
-        n_transcripts <- as.numeric(tx_per_gene[gene])
-        prior[i] <- 1 + 0.3 * log1p(n_transcripts - 1)
-      }
+  # align features -> gene ids (order-preserving)
+  features <- as.character(features)
+  gene_for_feat <- map$gene_id[ match(features, map$transcript_id) ]
+  
+  # expression proportions within each gene
+  totals_tx <- Matrix::rowSums(counts)  # transcript totals
+  # mark "expressed" by mean > threshold
+  mu <- Matrix::rowMeans(counts)
+  expressed <- mu > expr_threshold
+  
+  # compute per-gene k_g and entropy H_g over expressed isoforms
+  # group by gene_id
+  ok <- !is.na(gene_for_feat)
+  gene_ids <- unique(gene_for_feat[ok])
+  k_g <- setNames(integer(length(gene_ids)), gene_ids)
+  E_g <- setNames(numeric(length(gene_ids)), gene_ids)
+  
+  # build per-gene vectors
+  # (vectorized via split)
+  split_idx <- split(seq_along(features)[ok], gene_for_feat[ok])
+  for (g in names(split_idx)) {
+    idx <- split_idx[[g]]
+    idx_exp <- idx[expressed[idx]]
+    if (length(idx_exp) <= 1) {
+      k_g[g] <- length(idx_exp)
+      E_g[g] <- 0
+    } else {
+      x <- totals_tx[idx_exp]
+      s <- sum(x)
+      if (s <= 0) { k_g[g] <- 0; E_g[g] <- 0; next }
+      p <- x / s
+      p <- p[p > 0]
+      H <- -sum(p * log(p))
+      k <- length(p)
+      k_g[g] <- k
+      E_g[g] <- if (k > 1) H / log(k) else 0
     }
   }
   
-  .log("[OD Prior] range: min=%.3f, med=%.3f, max=%.3f, pct>1.5=%.1f%%",
-       min(prior), median(prior), max(prior), mean(prior > 1.5) * 100)
+  # combine count and evenness; fallback: if gene missing/zero, prior=1
+  k_vec <- k_g[ gene_for_feat ]
+  E_vec <- E_g[ gene_for_feat ]
+  k_vec[is.na(k_vec)] <- 1L
+  E_vec[is.na(E_vec)] <- 0
+  
+  prior <- 1 + alpha * log1p(pmax(k_vec - 1, 0) * pmax(E_vec, 0))
+  prior[!is.finite(prior) | prior < 1] <- 1
+  
+  # diag
+  message(sprintf("[OD Prior entropy] min=%.3f med=%.3f max=%.3f; unmapped=%d",
+                  min(prior), stats::median(prior), max(prior),
+                  sum(is.na(gene_for_feat))))
   prior
 }
 
@@ -404,7 +552,7 @@ calculate_complexity_prior <- function(gene_names, gtf_file = NULL, transcript_i
 #'
 #' Estimates per-gene overdispersion by integrating three complementary methods:
 #' (1) bootstrap-based estimation from Alevin output, (2) method-of-moments
-#' estimation from normalized counts, and (3) a complexity-based prior
+#' estimation from normalized counts, and (3) an entropy-based complexity prior
 #' from transcript annotation. Produces a weighted geometric mean of the three
 #' methods, followed by empirical Bayes shrinkage.
 #'
@@ -416,7 +564,6 @@ calculate_complexity_prior <- function(gene_names, gtf_file = NULL, transcript_i
 #' @param gene_names Optional character vector of gene names (length equal to
 #'   number of rows in \code{counts}). If \code{NULL}, rownames of \code{counts}
 #'   are used.
-#' @param gtf_file Optional path to a GTF file for computing transcript complexity.
 #' @param transcript_info Optional path to a transcript info table for computing
 #'   transcript complexity (must contain \code{gene_id} column).
 #' @param method_weights Named numeric vector of weights for combining the three
@@ -460,7 +607,6 @@ estimate_overdispersion_integrated <- function(
     alevin_dir,
     n_boot,
     gene_names     = NULL,
-    gtf_file       = NULL,
     transcript_info = NULL,
     method_weights = c(bootstrap = 0.3, moments = 0.5, prior = 0.2),
     min_cells_expr = 10,
@@ -491,8 +637,8 @@ estimate_overdispersion_integrated <- function(
   
   # Method 3: Complexity prior
   od_prior <- calculate_complexity_prior(
-    gene_names = gene_names,
-    gtf_file = gtf_file,
+    counts = counts,
+    features = gene_names,
     transcript_info = transcript_info
   )
   
@@ -549,9 +695,7 @@ estimate_overdispersion_integrated <- function(
 #'   subdirectories with Alevin output.
 #' @param n_boot Integer, number of bootstrap replicates per cell in the
 #'   Alevin output.
-#' @param gtf_file Optional path to a GTF file for transcript complexity
-#'   calculation.
-#' @param transcript_info Optional path to a transcript info table for
+#' @param transcript_info Path to a transcript info table for
 #'   complexity calculation (must contain \code{gene_id} column).
 #' @param block_cells Integer, number of cells per processing block for
 #'   bootstrap-based estimation.
@@ -561,6 +705,9 @@ estimate_overdispersion_integrated <- function(
 #'   (if applicable).
 #' @param debug_first_block Logical, if \code{TRUE} only the first bootstrap
 #'   block is processed (for debugging).
+#' @param wb number, weight for bootstrap-based component. wb+wm+wp must = 1.
+#' @param wm number, weight for moment-based component. wb+wm+wp must = 1.
+#' @param wp number, weight for prior-based component. wb+wm+wp must = 1.
 #'
 #' @details
 #' This function reads the sparse counts matrix (\code{quants_mat.gz}) along
@@ -573,7 +720,7 @@ estimate_overdispersion_integrated <- function(
 #' \enumerate{
 #'   \item Bootstrap-based estimation from per-cell Alevin replicates.
 #'   \item Method-of-moments estimation from normalized counts.
-#'   \item A complexity prior from transcript annotation.
+#'   \item An entropy-based complexity estimation.
 #' }
 #'
 #' @return A list with elements:
@@ -591,12 +738,14 @@ read_sample_data_improved <- function(
     sample_id,
     base_dir,
     n_boot,
-    gtf_file = NULL,
     transcript_info = NULL,
     block_cells = 128L,
     n_cores     = max(1L, parallel::detectCores() - 1L),
     omp_threads = 1L,
-    debug_first_block = FALSE
+    debug_first_block = FALSE,
+    wb = 0.8,
+    wm = 0.1,
+    wp = 0.1
 ) {
   t0 <- Sys.time()
   alevin_dir <- file.path(base_dir, sample_id, "alevin")
@@ -628,9 +777,8 @@ read_sample_data_improved <- function(
     alevin_dir = alevin_dir,
     n_boot = n_boot,
     gene_names = feats,
-    gtf_file = gtf_file,
     transcript_info = transcript_info,
-    method_weights = c(bootstrap = 0.3, moments = 0.5, prior = 0.2),
+    method_weights = c(bootstrap = wb, moments = wm, prior = wp),
     min_cells_expr = 10,
     n_cores = n_cores,
     debug_first_block = debug_first_block

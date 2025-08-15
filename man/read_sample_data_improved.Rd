@@ -8,12 +8,14 @@ read_sample_data_improved(
   sample_id,
   base_dir,
   n_boot,
-  gtf_file = NULL,
   transcript_info = NULL,
   block_cells = 128L,
   n_cores = max(1L, parallel::detectCores() - 1L),
   omp_threads = 1L,
-  debug_first_block = FALSE
+  debug_first_block = FALSE,
+  wb = 0.8,
+  wm = 0.1,
+  wp = 0.1
 )
 }
 \arguments{
@@ -26,10 +28,7 @@ subdirectories with Alevin output.}
 \item{n_boot}{Integer, number of bootstrap replicates per cell in the
 Alevin output.}
 
-\item{gtf_file}{Optional path to a GTF file for transcript complexity
-calculation.}
-
-\item{transcript_info}{Optional path to a transcript info table for
+\item{transcript_info}{Path to a transcript info table for
 complexity calculation (must contain \code{gene_id} column).}
 
 \item{block_cells}{Integer, number of cells per processing block for
@@ -43,6 +42,12 @@ Defaults to one less than the number of available cores.}
 
 \item{debug_first_block}{Logical, if \code{TRUE} only the first bootstrap
 block is processed (for debugging).}
+
+\item{wb}{number, weight for bootstrap-based component. wb+wm+wp must = 1.}
+
+\item{wm}{number, weight for moment-based component. wb+wm+wp must = 1.}
+
+\item{wp}{number, weight for prior-based component. wb+wm+wp must = 1.}
 }
 \value{
 A list with elements:
@@ -69,6 +74,6 @@ to compute integrated overdispersion estimates, which combine:
 \enumerate{
 \item Bootstrap-based estimation from per-cell Alevin replicates.
 \item Method-of-moments estimation from normalized counts.
-\item A complexity prior from transcript annotation.
+\item An entropy-based complexity estimation.
 }
 }

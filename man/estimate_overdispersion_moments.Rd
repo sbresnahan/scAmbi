@@ -4,32 +4,70 @@
 \alias{estimate_overdispersion_moments}
 \title{Estimate overdispersion using method-of-moments}
 \usage{
-estimate_overdispersion_moments(counts, min_cells = 10, size_factors = NULL)
+estimate_overdispersion_moments(
+  counts,
+  min_cells = 10,
+  size_factors = NULL,
+  rel_eps = 0,
+  abs_eps = 1e-08,
+  shrink_k = 30
+)
 }
 \arguments{
-\item{counts}{A numeric or sparse matrix of gene-by-cell counts.}
+\item{counts}{A numeric or sparse matrix of gene-by-cell counts.
+Automatically converted to dgCMatrix format if needed.}
 
 \item{min_cells}{Minimum number of cells with nonzero expression
-required for a gene to be included in estimation. Transcripts with fewer
-than this number are assigned an overdispersion of 1.}
+required for a gene to be included in estimation. Genes with fewer
+expressing cells are assigned an overdispersion of 1. Default is 10.}
 
 \item{size_factors}{Optional numeric vector of size factors for each
-cell. If \code{NULL}, they are computed as the column sums of
-\code{counts}, median-scaled to 1.}
+cell. If \code{NULL} (default), no normalization is applied (recommended
+if counts are already normalized). Invalid or non-positive values are
+replaced with the median of valid size factors.}
+
+\item{rel_eps}{Relative epsilon for stabilization. If > 0, adds
+\code{rel_eps * mean} to both numerator and denominator. If 0 (default),
+uses absolute epsilon instead.}
+
+\item{abs_eps}{Absolute epsilon for stabilization when \code{rel_eps = 0}.
+Adds this constant to both numerator and denominator. Default is 1e-8.}
+
+\item{shrink_k}{Shrinkage parameter controlling how strongly estimates
+are shrunk toward 1. Higher values increase shrinkage. The confidence
+weight is computed as \code{n_cells / (n_cells + shrink_k)}. Default is 30.}
 }
 \value{
-A numeric vector of overdispersion estimates (length equal to
-the number of genes).
+A numeric vector of overdispersion estimates with length equal to
+the number of genes (rows) in the input matrix. Values are constrained
+to be >= 1.
 }
 \description{
 Computes per-gene overdispersion estimates from a counts matrix
 using a method-of-moments approach. Optionally normalizes counts
-by size factors before estimation.
+by size factors before estimation. Uses only nonzero (expressing)
+cells for variance calculations and applies shrinkage toward 1
+based on sample size.
 }
 \details{
-For each gene, nonzero expression values are used to compute the mean
-and variance. A pseudocount of 0.1 is added to both before computing
-overdispersion (\eqn{OD = (var + 0.1) / (mean + 0.1)}). The estimate
-is then shrunk toward 1 based on the number of expressing cells, with
-stronger shrinkage for small sample sizes.
+For each gene, only nonzero expression values from expressing cells are
+used to compute the sample mean and variance. The method-of-moments
+overdispersion estimate is computed as:
+\deqn{OD_{raw} = \frac{var + \epsilon_{num}}{mean + \epsilon_{den}}}
+
+The epsilon terms provide numerical stabilization and can be either relative
+or absolute. When \code{rel_eps > 0}, both epsilon terms equal
+\code{rel_eps * mean}. When \code{rel_eps = 0} (default), both epsilon
+terms equal \code{abs_eps}.
+
+The raw estimate is then shrunk toward 1 using:
+\deqn{OD_{shrunk} = 1 + \frac{n}{n + k} \times (OD_{raw} - 1)}
+
+where \code{n} is the number of expressing cells and \code{k} is the
+shrinkage parameter. This reduces noise in estimates from genes with
+few expressing cells.
+
+Genes with fewer than \code{min_cells} expressing cells are assigned
+an overdispersion of 1. Negative variances (which can occur with small
+sample sizes) are set to 0 before overdispersion calculation.
 }

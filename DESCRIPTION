@@ -1,7 +1,7 @@
 Package: scAmbi
 Type: Package
 Title: Mapping Ambiguity Overdispersion Correction for scRNA-seq
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: person("Sean T.", "Bresnahan", email = "stbresnahan@mdanderson.org", role = c("aut","cre"))
 Description: Tools to estimate and correct overdispersion from read-to-transcript mapping ambiguity
     for single-cell RNA-seq quantifications (e.g., Salmon Alevin bootstraps), and utilities to

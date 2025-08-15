@@ -2,33 +2,76 @@
 % Please edit documentation in R/functions.R
 \name{calculate_complexity_prior}
 \alias{calculate_complexity_prior}
-\title{Calculate complexity-based prior for overdispersion}
+\title{Calculate complexity-based prior for overdispersion using entropy}
 \usage{
-calculate_complexity_prior(gene_names, gtf_file = NULL, transcript_info = NULL)
+calculate_complexity_prior(
+  counts,
+  transcript_info,
+  features,
+  id_col_tx = "transcript_id",
+  id_col_gene = "gene_id",
+  expr_threshold = 0,
+  alpha = 0.6
+)
 }
 \arguments{
-\item{gene_names}{Character vector of gene IDs for which to compute the prior.}
+\item{counts}{A numeric or sparse matrix of transcript-by-cell counts.
+Rows represent transcripts, columns represent cells. Automatically
+converted to sparse Matrix format if needed.}
 
-\item{gtf_file}{Optional path to a GTF file containing transcript annotations.
-If provided and \code{transcript_info} is not given, transcript counts per
-gene will be computed from this file.}
+\item{transcript_info}{Either a data.frame or path to a tab-delimited file
+containing transcript-to-gene mapping. Must include columns specified by
+\code{id_col_tx} and \code{id_col_gene}.}
 
-\item{transcript_info}{Optional path to a tab-delimited file containing
-transcript metadata with a \code{gene_id} column. Used to count transcripts
-per gene.}
+\item{features}{Character vector of transcript IDs in the desired output
+order. These should match the transcript IDs in \code{transcript_info}
+and typically correspond to rownames of \code{counts}.}
+
+\item{id_col_tx}{Name of the column in \code{transcript_info} containing
+transcript IDs. Default is "transcript_id".}
+
+\item{id_col_gene}{Name of the column in \code{transcript_info} containing
+gene IDs. Default is "gene_id".}
+
+\item{expr_threshold}{Minimum mean expression threshold for a transcript
+to be considered "expressed" and included in complexity calculations.
+Default is 0 (include all transcripts).}
+
+\item{alpha}{Scaling parameter controlling the strength of the complexity
+prior. Recommended range is 0.3-1.0. Higher values increase the
+influence of complexity on the prior. Default is 0.6.}
 }
 \value{
-A numeric vector of prior scaling factors (length equal to the number
-of genes), where larger values correspond to higher transcript complexity.
+A numeric vector of prior scaling factors with length equal to
+\code{length(features)}. Values are >= 1, where larger values indicate
+higher transcript complexity within the gene context.
 }
 \description{
-Computes a per-gene prior scaling factor for overdispersion estimates
-based on transcript complexity, using either a transcript info table
-or a GTF annotation file.
+Computes a per-transcript prior scaling factor for overdispersion estimates
+based on transcript complexity within genes. The complexity measure combines
+the number of expressed isoforms per gene with their expression evenness
+(entropy), providing stronger priors for transcripts from genes with more
+diverse isoform expression patterns.
 }
 \details{
-For each gene, the number of transcripts is counted, and the prior scaling
-factor is computed as:
-\deqn{prior = 1 + 0.3 \times \log1p(n\_transcripts - 1)}
-Genes absent from the annotation are assigned a prior of 1.0.
+The function computes transcript complexity using a two-step process:
+\enumerate{
+\item \strong{Isoform counting}: For each gene, count the number of expressed
+isoforms (transcripts with mean expression > \code{expr_threshold}).
+\item \strong{Expression evenness}: Calculate the normalized Shannon entropy
+of isoform expression within each gene:
+\deqn{E_g = \frac{H_g}{\log(k_g)} = \frac{-\sum_i p_i \log(p_i)}{\log(k_g)}}
+where \eqn{p_i} is the proportion of total gene expression from isoform \eqn{i},
+and \eqn{k_g} is the number of expressed isoforms in gene \eqn{g}.
+}
+
+The prior scaling factor for each transcript is then computed as:
+\deqn{prior = 1 + \alpha \times \log(1 + \max(k_g - 1, 0) \times \max(E_g, 0))}
+
+This formulation gives higher prior values to transcripts from genes with:
+more expressed isoforms (\eqn{k_g > 1}) and more even expression across
+isoforms (\eqn{E_g} closer to 1).
+
+Transcripts from genes with only one expressed isoform or unmapped
+transcripts receive a prior value of 1.0 (no adjustment).
 }

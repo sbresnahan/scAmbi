@@ -28,7 +28,7 @@ knitr::opts_chunk$set(
 
 When quantifying single-cell transcript expression, fragment assignment ambiguity and multi-mapping reads can introduce inferential variance in estimated counts. Salmon/Alevin can output per‑cell bootstrap replicates that capture inferential uncertainty due to fragments mapping to multiple transcripts of the same gene [@srivastava_bayesian_2020; @patro_salmon_2017; @srivastava_alevin_2019]. This uncertainty manifests as **overdispersion** which, if uncorrected, inflates variability estimates and distorts downstream analyses (differential expression, clustering, trajectory inference) [@baldoni_dividing_2024].
 
-Here we present [scAmbi](https://github.com/sbresnahan/scAmbi), an integrated approach that (i) estimates per‑transcript overdispersion from Alevin bootstraps in a sparse‑aware way, (ii) combines that estimate with moment‑based and annotation‑driven priors for further exploration, and (iii) applies the boostrap-based overdispersion result either by **building a corrected assay** (`RNA_corr`) or by **supplying model offsets**. We then evaluate the impact using **BCV** (biological coefficient of variation) analyses at the between‑sample and within‑sample (cell‑to‑cell) levels.
+Here we present [scAmbi](https://github.com/sbresnahan/scAmbi), an integrated approach that (i) estimates per‑transcript overdispersion from Alevin bootstraps in a sparse‑aware way, (ii) combines that estimate with moment‑based and entropy-based complexity priors for further exploration, and (iii) applies the boostrap-based overdispersion result either by **building a corrected assay** (`RNA_corr`) or by **supplying model offsets**. We then evaluate the impact using **BCV** (biological coefficient of variation) analyses at the between‑sample and within‑sample (cell‑to‑cell) levels.
 
 ## How this relates to `edgeR::catchSalmon()`
 
@@ -36,7 +36,7 @@ Here we present [scAmbi](https://github.com/sbresnahan/scAmbi), an integrated ap
 
 ## What's unique about this package
 
-- **OD_integrated**: weighted geometric fusion of three signals: bootstrap‑based OD, moment‑based OD on normalized counts, and a complexity prior from transcript counts per gene, followed by adaptive shrinkage.
+- **OD_integrated**: weighted geometric fusion of three signals: bootstrap‑based OD, moment‑based OD on normalized counts, and an entropy-based complexity prior, followed by adaptive shrinkage.
 - **Sparse‑aware C++ kernel**: blockwise processing of the (transcripts × cells × bootstraps) matrix, strict bounds checking, and efficient dgCMatrix traversal.
 - **Flexible correction**: use `RNA_corr` directly, or supply offsets constructed from (a) corrected/raw ratios, (b) OD vectors, or (c) any feature vector stored in `feature_meta`.
 - **BCV analysis suite**: between‑sample (pseudobulk across samples) and within‑sample (cell grouping to pseudobulk) pipelines with matched plotting and summaries.
@@ -58,7 +58,7 @@ This package requires **R version 4.2 or higher**.
 ### Data I/O and processing
 - **eds** (>= 1.0.0): Reading Alevin EDS sparse matrix format
 - **tximport** (>= 1.20.0): Transcript-level quantification import
-- **rtracklayer** (>= 1.52.0): GTF file parsing for gene complexity calculations
+- **rtracklayer** (>= 1.52.0): GTF file parsing
 - **jsonlite** (>= 1.7.0): JSON data handling
 
 ### Visualization
@@ -109,30 +109,27 @@ install.packages("scAmbi.zip", repos = NULL, type = "source")
 
 # Notation and variance model
 
-For gene (or transcript) \(g\) in cell \(i\): counts \(y_{gi}\), library size \(N_i\), underlying proportion \(\pi_{gi}\), mean \(\mu_{gi}=N_i\pi_{gi}\). Read-to-transcript ambiguity inflates technical variance beyond Poisson:
+The overdispersion correction approach implemented in scAmbi is motivated by the observation that transcript-level quantifications exhibit increased technical variance due to read-to-transcript ambiguity (RTA). While reads can typically be assigned unambiguously to genes, they are often compatible with multiple transcripts for the same gene, particularly for genes with many isoforms. This assignment uncertainty disrupts the mean-variance relationship normally observed in RNA-seq data and interferes with standard differential expression methods.
 
-\[
-\mathbb{E}(y_{gi}\mid\pi_{gi})=\mu_{gi},\qquad
-\mathrm{Var}(y_{gi}\mid\pi_{gi})=\sigma_g^2\,\mu_{gi},\;\sigma_g^2>1.
-\]
+For gene (or transcript) $g$ in cell $i$: counts $y_{gi}$, library size $N_i$, underlying proportion $\pi_{gi}$, mean $\mu_{gi}=N_i\pi_{gi}$. Read-to-transcript ambiguity inflates technical variance beyond Poisson:
 
-With biological variation across cells, \(\pi_{gi}\) varies and marginal variance becomes
+$\mathbb{E}(y_{gi}\mid\pi_{gi})=\mu_{gi}, \qquad \mathrm{Var}(y_{gi}\mid\pi_{gi})=\sigma_g^2\,\mu_{gi}, \; \sigma_g^2>1$
 
-\[
-\mathrm{Var}(y_{gi})\;=\;\sigma_g^2\,\mu_{gi}\; +\; \phi_g\,\mu_{gi}^2,
-\]
+With biological variation across cells, $\pi_{gi}$ varies and marginal variance becomes
 
-with \(\phi_g\) the NB-like biological dispersion[@baldoni_dividing_2024].
+$$\mathrm{Var}(y_{gi})\;=\;\sigma_g^2\,\mu_{gi}\; +\; \phi_g\,\mu_{gi}^2,$$
+
+with $\phi_g$ the NB-like biological dispersion[@baldoni_dividing_2024]. The key insight is that the technical overdispersion parameter $\sigma_g^2$ can be estimated from bootstrap samples and divided out of the transcript counts, yielding scaled counts that follow the standard negative binomial mean-variance relationship and can be analyzed with established differential expression methods.
 
 ---
 
 # Integrated overdispersion estimation
 
-By default, scAmbi uses a boostrap-based overdispersion estimate following Baldoni *et al.*[@baldoni_dividing_2024] for correction. For exploratory purposes, it also computes two additional components per transcript and an integrated estimate by combining the three components on the log scale.
+By default, scAmbi uses a bootstrap-based overdispersion estimate following Baldoni *et al.*[@baldoni_dividing_2024] for correction. For exploratory purposes, it also computes two additional components per transcript and an integrated estimate by combining the three components on the log scale.
 
 ## 1) Bootstrap-based component (sparse-aware)
 
-Let \(u_{tib}\) be the Alevin bootstrap count for **transcript** \(t\), cell \(i\), bootstrap \(b = 1..B\).  
+Let $u_{tib}$ be the Alevin bootstrap count for **transcript** $t$, cell $i$, bootstrap $b = 1..B$.  
 For each cell we traverse the sparse bootstrap columns once, accumulating for each transcript:
 
 - Total sum \(\sum_b u_{tib}\) and sum of squares \(\sum_b u_{tib}^2\) over all \(B\) replicates.
@@ -176,33 +173,48 @@ clamped to \(\ge 1\). Transcripts with \(e_t\) below the expression threshold de
 2. If **gene-level** OD is desired, aggregate *after* estimating transcript-level OD (e.g., gene-wise median or counts-weighted mean of transcript ODs).  
 3. $\mathrm{OD}^{\mathrm{boot}}_t$ is the default OD estimate for correction.
 
-## 2) Moment-based component (on normalized counts)
+## 2) Moment-based component
 
-Compute per-transcript OD using library-size normalized counts across cells (non-zeros only):
+The moment-based overdispersion estimate captures gene-specific variability patterns by comparing the observed variance to what would be expected under a Poisson model. Sequencing and amplification introduce technical noise that scales with expression level, while biological processes create additional variance through cell-to-cell differences in transcriptional state, cell cycle progression, and stochastic gene expression. Furthermore, low-abundance genes may be captured inconsistently across cells due to dropout effects, inflating their apparent variability.
 
-\[
-\widehat{\mathrm{OD}}^{\mathrm{mom}}_t = \frac{\mathrm{Var}(x_t)+0.1}{\mathbb{E}(x_t)+0.1}.
-\]
+The raw moment-based estimate uses counts across expressing cells only (non-zeros):
 
-Apply confidence-weighted shrinkage toward 1 with \(n_t\) expressing cells:
+$$\widehat{\mathrm{OD}}^{\mathrm{mom}}_g = \frac{\mathrm{Var}(x_g) + \epsilon}{\mathbb{E}(x_g) + \epsilon}$$
 
-\[
-\mathrm{OD}^{\mathrm{mom}}_t = \max\!\left(1,\;1+\frac{n_t}{n_t+30}\big(\widehat{\mathrm{OD}}^{\mathrm{mom}}_t-1\big)\right).
-\]
+where $\epsilon$ provides numerical stabilization. When `rel_eps > 0`, both epsilon terms equal `rel_eps * mean`. When `rel_eps = 0` (default), both epsilon terms equal `abs_eps` (default $10^{-8}$). Using only expressing cells avoids bias from technical zeros while capturing the true biological variability among cells that detectably express the gene.
 
-## 3) Complexity prior (annotation-driven)
+To account for estimation uncertainty with small sample sizes, confidence-weighted shrinkage is applied toward the null value of 1:
 
-If transcript annotations are available, let \(T_g\) be the number of transcripts for gene \(g\). Set
+$$\mathrm{OD}^{\mathrm{mom}}_g = \max\!\left(1,\;1+\frac{n_g}{n_g+k}\big(\widehat{\mathrm{OD}}^{\mathrm{mom}}_g-1\big)\right)$$
 
-\[
-\mathrm{OD}^{\mathrm{prior}}_t = 1+0.3\,\log\big(1+(T_g-1)\big),
-\]
+where $n_g$ is the number of expressing cells and $k$ is the shrinkage parameter (default 30). This shrinkage is stronger for genes with fewer expressing cells, reflecting lower confidence in variance estimates from small samples.
 
-else use 1 for all transcripts.
+A key consideration is that this approach may reduce some genuine biological signal along with technical noise, particularly for genes undergoing continuous state transitions or exhibiting meaningful transcriptional heterogeneity. To address this, the complexity prior (Section 3) provides gene-specific adjustments that account for expected biological variability in structurally complex genes.
+
+## 3) Complexity prior (entropy-based)
+
+The complexity prior is biologically motivated by the observation that genes with multiple actively expressed isoforms exhibit increased expression variability due to cell-to-cell differences in splicing regulation and quantification uncertainty when similar isoforms compete for read assignment. The prior combines isoform count with expression evenness to capture this increased variability. 
+For each gene $g$, let $k_g$ be the number of expressed isoforms (transcripts with mean expression above threshold) and $E_g$ be the normalized Shannon entropy of isoform expression:
+
+$$E_g = \frac{H_g}{\log(k_g)} = \frac{-\sum_{i} p_i \log(p_i)}{\log(k_g)}$$
+
+where $p_i$ is the proportion of total gene expression from isoform $i$. The complexity prior for each transcript is then:
+
+$$\mathrm{OD}^{\mathrm{prior}}_t = 1 + \alpha \cdot \log\big(1 + \max(k_g - 1, 0) \times \max(E_g, 0)\big)$$
+
+where $\alpha$ is a scaling parameter (default 0.6). This gives higher prior values to transcripts from genes with more expressed isoforms that have relatively even expression levels. Transcripts from single-isoform genes or unmapped transcripts receive a prior of 1.
+
+```{r include-plotA, echo=FALSE, fig.cap="Figure 1", out.width="100%"}
+knitr::include_graphics("plotA.png")
+```
+
+```{r include-plotB, echo=FALSE, fig.cap="Figure 2", out.width="100%"}
+knitr::include_graphics("plotB.png")
+```
 
 ## 4) Geometric fusion + adaptive shrinkage
 
-With weights \(w_b=0.3\), \(w_m=0.5\), \(w_p=0.2\) (renormalized):
+With weights \(w_b=0.8\), \(w_m=0.1\), \(w_p=0.1\):
 
 \[
 \log \mathrm{OD}^{\mathrm{int}}_t = w_b\log\mathrm{OD}^{\mathrm{boot}}_t + w_m\log\mathrm{OD}^{\mathrm{mom}}_t + w_p\log\mathrm{OD}^{\mathrm{prior}}_t.
@@ -393,7 +405,7 @@ for (i in 1:length(objs)) {
 }
 ```
 
-## Step 5: compare raw to OverDisp_integrated-corrected counts
+## Step 5: compare raw to OverDisp_boostrap-corrected counts
 
 ```r
 results_comprehensive <- analyze_bcv_comprehensive(
@@ -454,15 +466,15 @@ COMPARISON (within-sample):
 ============================================================ 
 ```
 
-```{r include-plot1, echo=FALSE, fig.cap="Figure 1", out.width="100%"}
+```{r include-plot1, echo=FALSE, fig.cap="Figure 3", out.width="100%"}
 knitr::include_graphics("plot1.png")
 ```
 
-```{r include-plot2, echo=FALSE, fig.cap="Figure 2", out.width="100%"}
+```{r include-plot2, echo=FALSE, fig.cap="Figure 4", out.width="100%"}
 knitr::include_graphics("plot2.png")
 ```
 
-```{r include-plot3, echo=FALSE, fig.cap="Figure 3", out.width="100%"}
+```{r include-plot3, echo=FALSE, fig.cap="Figure 5", out.width="100%"}
 knitr::include_graphics("plot3.png")
 ```
 
